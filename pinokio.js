@@ -22,6 +22,10 @@ module.exports = {
 				icon: 'fa-solid fa-plug',
 				text: 'Installing',
 				href: 'install.js'
+			}, {
+				icon: 'fa-solid fa-terminal',
+				text: 'Update',
+				href: 'update.js'
 			}];
 		}
 
@@ -94,6 +98,10 @@ module.exports = {
 			icon: 'fa-solid fa-plug',
 			text: 'Install',
 			href: 'install.js'
+		}, {
+			icon: 'fa-solid fa-terminal',
+			text: 'Update',
+			href: 'update.js'
 		}];
 	}
 };

@@ -1,23 +1,25 @@
 // Pinokio update manifest for RamClaw
-// Refreshes bundled OpenClaw and Playwright dependencies without deleting sandbox
-
-const path = require('path');
-
-const venvPython = process.platform === 'win32'
-  ? path.join('sandbox', 'venv', 'Scripts', 'python.exe')
-  : path.join('sandbox', 'venv', 'bin', 'python');
 
 module.exports = {
   run: [
-    // Reinstall bundled OpenClaw (upgrade)
     {
+      when: "{{exists('sandbox/venv')}}",
       method: 'shell.run',
       params: {
         message: [
-          `${venvPython} -m pip install --upgrade ./openclaw`,
-          `${venvPython} -m pip install --upgrade playwright`,
-          `${venvPython} -m playwright install chromium`,
-          `${venvPython} -m pip install --upgrade gitpython`
+          'sandbox/venv/Scripts/python.exe -m pip install --upgrade ./openclaw',
+          'sandbox/venv/Scripts/python.exe -m pip install --upgrade playwright gitpython',
+          'sandbox/venv/Scripts/python.exe -m playwright install chromium',
+          'node create_sandbox.js'
+        ]
+      }
+    },
+    {
+      when: "{{!exists('sandbox/venv')}}",
+      method: 'shell.run',
+      params: {
+        message: [
+          'echo RamClaw is not installed yet. Run install.js first.'
         ]
       }
     }
