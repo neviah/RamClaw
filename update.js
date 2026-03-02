@@ -1,36 +1,25 @@
+// Pinokio update manifest for RamClaw
+// Refreshes bundled OpenClaw and Playwright dependencies without deleting sandbox
+
 const path = require('path');
-const { spawnSync } = require('child_process');
-const fs = require('fs');
 
-const SANDBOX_ROOT = path.join(__dirname, 'sandbox');
+const venvPython = process.platform === 'win32'
+  ? path.join('sandbox', 'venv', 'Scripts', 'python.exe')
+  : path.join('sandbox', 'venv', 'bin', 'python');
 
-function run(cmd, args, opts = {}) {
-	const result = spawnSync(cmd, args, { stdio: 'inherit', ...opts });
-	if (result.status !== 0) {
-		throw new Error(`${cmd} ${args.join(' ')} failed`);
-	}
-}
-
-function main() {
-	const venv = path.join(SANDBOX_ROOT, 'venv');
-	if (!fs.existsSync(venv)) {
-		console.error('Sandbox missing. Run install.js first.');
-		process.exit(1);
-	}
-	const pip = process.platform === 'win32'
-		? path.join(venv, 'Scripts', 'pip.exe')
-		: path.join(venv, 'bin', 'pip');
-	const python = process.platform === 'win32'
-		? path.join(venv, 'Scripts', 'python.exe')
-		: path.join(venv, 'bin', 'python');
-
-	// Reinstall bundled OpenClaw and refresh dependencies without deleting sandbox
-	run(pip, ['install', '--upgrade', path.join(__dirname, 'openclaw')]);
-	run(pip, ['install', '--upgrade', 'playwright']);
-	run(python, ['-m', 'playwright', 'install', 'chromium']);
-	console.log('Update complete. Sandbox preserved at', SANDBOX_ROOT);
-}
-
-if (require.main === module) {
-	try { main(); } catch (err) { console.error('Update failed:', err.message); process.exit(1); }
-}
+module.exports = {
+  run: [
+    // Reinstall bundled OpenClaw (upgrade)
+    {
+      method: 'shell.run',
+      params: {
+        message: [
+          `${venvPython} -m pip install --upgrade ./openclaw`,
+          `${venvPython} -m pip install --upgrade playwright`,
+          `${venvPython} -m playwright install chromium`,
+          `${venvPython} -m pip install --upgrade gitpython`
+        ]
+      }
+    }
+  ]
+};
