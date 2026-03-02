@@ -1,0 +1,9 @@
+.vscode/
+__pycache__/
+*.pyc
+sandbox/venv/
+sandbox/.ssh/
+sandbox/ramclaw.log
+sandbox/config.json
+sandbox/workspace/
+node_modules/
