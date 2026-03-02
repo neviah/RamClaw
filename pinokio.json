@@ -1,0 +1,8 @@
+{
+  "version": "5.0",
+  "name": "RamClaw",
+  "title": "RamClaw",
+  "description": "Sandboxed LM Studio-only OpenClaw fork packaged for Pinokio.",
+  "icon": "icon.png",
+  "platform": "*"
+}
