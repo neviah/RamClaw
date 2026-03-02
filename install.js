@@ -6,7 +6,8 @@ module.exports = {
       method: 'shell.run',
       params: {
         message: [
-          "python -c \"from pathlib import Path; Path('sandbox').mkdir(parents=True, exist_ok=True); Path('sandbox/workspace').mkdir(parents=True, exist_ok=True)\""
+          'mkdir sandbox 2>nul',
+          'mkdir sandbox\\workspace 2>nul'
         ]
       }
     },

@@ -3,6 +3,14 @@
 module.exports = {
   run: [
     {
+      method: 'shell.run',
+      params: {
+        message: [
+          'git pull'
+        ]
+      }
+    },
+    {
       when: "{{exists('sandbox/venv')}}",
       method: 'shell.run',
       params: {
