@@ -7,6 +7,7 @@ const SANDBOX_ROOT = path.join(__dirname, 'sandbox');
 const WEBUI_ROOT = path.join(__dirname, 'webui');
 const CONFIG_PATH = path.join(SANDBOX_ROOT, 'config.json');
 const LOG_PATH = path.join(SANDBOX_ROOT, 'ramclaw.log');
+const HISTORY_PATH = path.join(SANDBOX_ROOT, 'history.json');
 
 const logStream = fs.createWriteStream(LOG_PATH, { flags: 'a' });
 
@@ -53,6 +54,49 @@ async function pingLMStudio(endpoint) {
   }
 }
 
+async function fetchLMModels(endpoint) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+  try {
+    const base = endpoint.replace(/\/$/, '');
+    const url = `${base}/models`;
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (resp.ok) {
+      const json = await resp.json();
+      return (json.data || []).map((m) => m.id || m.name || String(m));
+    }
+    return [];
+  } catch (err) {
+    clearTimeout(timeout);
+    return [];
+  }
+}
+
+function loadHistory() {
+  try {
+    return JSON.parse(fs.readFileSync(HISTORY_PATH, 'utf-8'));
+  } catch (err) {
+    return [];
+  }
+}
+
+function saveHistory(history) {
+  try {
+    fs.writeFileSync(HISTORY_PATH, JSON.stringify(history, null, 2), 'utf-8');
+  } catch (err) {
+    log(`History write error: ${err.message}`);
+  }
+}
+
+function appendHistory(entry) {
+  const history = loadHistory();
+  history.unshift(entry);
+  // Cap at 200 entries to prevent unbounded growth of history.json
+  if (history.length > 200) history.length = 200;
+  saveHistory(history);
+}
+
 function serveStatic(req, res) {
   const urlPath = req.url === '/' ? '/index.html' : req.url.split('?')[0];
   const target = path.join(WEBUI_ROOT, urlPath);
@@ -93,14 +137,29 @@ function handleTask(req, res, body) {
     });
 
     log(`Task started: ${task}`);
-    child.stdout.on('data', (chunk) => res.write(chunk));
+    const startedAt = new Date().toISOString();
+    let output = '';
+
+    child.stdout.on('data', (chunk) => {
+      res.write(chunk);
+      output += chunk.toString();
+    });
     child.stderr.on('data', (chunk) => {
       const text = chunk.toString();
       log(`Task stderr: ${text.trim()}`);
       res.write(`\n[err] ${text}`);
+      output += `[err] ${text}`;
     });
     child.on('close', (code) => {
       log(`Task finished with code ${code}`);
+      appendHistory({
+        task,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        exitCode: code,
+        // Truncate to prevent excessive disk usage from very long task outputs
+        output: output.slice(0, 2000),
+      });
       res.end();
     });
     req.on('close', () => child.kill());
@@ -120,6 +179,39 @@ function handlePublicKey(res) {
     res.writeHead(500);
     res.end('Public key not found. Run install.js first.');
   }
+}
+
+async function handleStatus(res, endpoint) {
+  const reachable = await pingLMStudio(endpoint);
+  const models = reachable ? await fetchLMModels(endpoint) : [];
+  const history = loadHistory();
+  const errorCount = history.filter((h) => h.exitCode !== 0).length;
+  const payload = {
+    lmStudio: {
+      reachable,
+      endpoint,
+      models,
+    },
+    metrics: {
+      taskCount: history.length,
+      errorCount,
+      lastRunAt: history.length > 0 ? history[0].finishedAt : null,
+    },
+  };
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(payload));
+}
+
+function handleHistory(req, res) {
+  if (req.method === 'DELETE') {
+    saveHistory([]);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+  const history = loadHistory();
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(history));
 }
 
 async function main() {
@@ -147,6 +239,16 @@ async function main() {
 
     if (req.url === '/api/public-key') {
       handlePublicKey(res);
+      return;
+    }
+
+    if (req.url === '/api/status') {
+      handleStatus(res, endpoint);
+      return;
+    }
+
+    if (req.url === '/api/history') {
+      handleHistory(req, res);
       return;
     }
 

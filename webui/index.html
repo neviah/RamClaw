@@ -5,29 +5,143 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RamClaw</title>
   <style>
-    body { font-family: sans-serif; margin: 2rem; background: #0f172a; color: #e2e8f0; }
-    .panel { max-width: 960px; margin: 0 auto; padding: 1.5rem; border: 1px solid #1e293b; border-radius: 12px; background: linear-gradient(135deg, #111827, #0b1224); }
-    textarea { width: 100%; height: 120px; margin-top: 0.5rem; background: #0b1224; color: #e2e8f0; border: 1px solid #1e293b; border-radius: 8px; padding: 0.75rem; }
-    button { background: #22d3ee; color: #0b1224; border: none; padding: 0.75rem 1.25rem; border-radius: 8px; cursor: pointer; font-weight: 700; }
-    button:disabled { background: #334155; cursor: not-allowed; }
-    pre { background: #0b1224; padding: 1rem; border-radius: 8px; overflow: auto; border: 1px solid #1e293b; }
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    header { background: #111827; border-bottom: 1px solid #1e293b; padding: 0.75rem 1.5rem; display: flex; align-items: center; gap: 1rem; }
+    header h1 { margin: 0; font-size: 1.25rem; color: #38bdf8; }
+    #lm-badge { font-size: 0.75rem; padding: 0.2rem 0.6rem; border-radius: 999px; font-weight: 700; }
+    #lm-badge.ok { background: #065f46; color: #6ee7b7; }
+    #lm-badge.err { background: #7f1d1d; color: #fca5a5; }
+    #lm-badge.checking { background: #1e3a5f; color: #7dd3fc; }
+    nav { display: flex; gap: 0; border-bottom: 1px solid #1e293b; background: #111827; padding: 0 1.5rem; }
+    nav button { background: transparent; border: none; border-bottom: 2px solid transparent; color: #94a3b8; padding: 0.6rem 1rem; cursor: pointer; font-size: 0.9rem; font-weight: 600; transition: color 0.15s; }
+    nav button:hover { color: #e2e8f0; }
+    nav button.active { color: #38bdf8; border-bottom-color: #38bdf8; }
+    .tab { display: none; padding: 1.5rem; max-width: 960px; margin: 0 auto; }
+    .tab.active { display: block; }
+    .card { background: linear-gradient(135deg, #111827, #0b1224); border: 1px solid #1e293b; border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem; }
+    label { display: block; margin-bottom: 0.25rem; font-size: 0.85rem; color: #94a3b8; }
+    textarea { width: 100%; height: 110px; background: #0b1224; color: #e2e8f0; border: 1px solid #1e293b; border-radius: 8px; padding: 0.75rem; font-size: 0.95rem; resize: vertical; }
+    textarea:focus { outline: none; border-color: #38bdf8; }
+    .btn { background: #22d3ee; color: #0b1224; border: none; padding: 0.6rem 1.1rem; border-radius: 8px; cursor: pointer; font-weight: 700; font-size: 0.9rem; }
+    .btn:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+    .btn-danger { background: #dc2626; color: #fff; }
+    .btn-secondary { background: #1e293b; color: #e2e8f0; }
+    .btn-sm { padding: 0.3rem 0.7rem; font-size: 0.8rem; }
+    pre { background: #0b1224; padding: 1rem; border-radius: 8px; overflow: auto; border: 1px solid #1e293b; font-size: 0.85rem; max-height: 320px; }
+    .row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-top: 0.75rem; }
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; }
+    .metric-box { background: #0b1224; border: 1px solid #1e293b; border-radius: 10px; padding: 1rem; text-align: center; }
+    .metric-box .val { font-size: 2rem; font-weight: 700; color: #38bdf8; }
+    .metric-box .lbl { font-size: 0.75rem; color: #64748b; margin-top: 0.25rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { text-align: left; padding: 0.5rem 0.75rem; color: #64748b; border-bottom: 1px solid #1e293b; }
+    td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #0f172a; vertical-align: top; }
+    tr:hover td { background: #0b1224; }
+    .badge { display: inline-block; padding: 0.15rem 0.45rem; border-radius: 4px; font-size: 0.72rem; font-weight: 700; }
+    .badge-ok { background: #065f46; color: #6ee7b7; }
+    .badge-err { background: #7f1d1d; color: #fca5a5; }
+    .task-text { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .model-list { list-style: none; margin: 0; padding: 0; }
+    .model-list li { padding: 0.3rem 0; border-bottom: 1px solid #1e293b; font-size: 0.85rem; color: #a5f3fc; }
+    .endpoint-chip { display: inline-block; background: #0b1224; border: 1px solid #1e293b; border-radius: 6px; padding: 0.2rem 0.6rem; font-family: monospace; font-size: 0.8rem; color: #7dd3fc; }
     a { color: #38bdf8; }
+    code { font-family: monospace; background: #0b1224; padding: 0.1rem 0.4rem; border-radius: 4px; }
+    #pub-key-output { font-size: 0.78rem; word-break: break-all; }
   </style>
 </head>
 <body>
-  <div class="panel">
-    <h1>RamClaw</h1>
-    <p>Fully sandboxed, LM Studio only. No cloud providers, no setup required.</p>
-    <label for="task">Task</label>
-    <textarea id="task" placeholder="What should RamClaw do?"></textarea>
-    <div style="margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
-      <button id="run">Run Task</button>
-      <button id="showKey">Show GitHub Public Key</button>
-      <a id="workspaceLink" href="#" target="_blank">Open workspace folder</a>
+  <header>
+    <h1>🐾 RamClaw</h1>
+    <span id="lm-badge" class="checking">LM Studio …</span>
+    <span style="flex:1"></span>
+    <a href="/workspace" target="_blank" aria-label="Open Workspace in new tab" style="font-size:0.8rem;">Open Workspace</a>
+  </header>
+  <nav>
+    <button class="active" data-tab="tab-task">Run Task</button>
+    <button data-tab="tab-history">History</button>
+    <button data-tab="tab-llm">LLM</button>
+    <button data-tab="tab-metrics">Metrics</button>
+    <button data-tab="tab-settings">Settings</button>
+  </nav>
+
+  <!-- Run Task Tab -->
+  <div id="tab-task" class="tab active">
+    <div class="card">
+      <label for="task">Describe the task</label>
+      <textarea id="task" placeholder="What should RamClaw do?"></textarea>
+      <div class="row">
+        <button class="btn" id="run">▶ Run Task</button>
+      </div>
     </div>
-    <h3>Logs</h3>
-    <pre id="log"></pre>
+    <div class="card">
+      <label>Output</label>
+      <pre id="log"></pre>
+    </div>
   </div>
+
+  <!-- History Tab -->
+  <div id="tab-history" class="tab">
+    <div class="card">
+      <div class="row" style="margin-top:0; margin-bottom:0.75rem;">
+        <strong style="flex:1">Task History</strong>
+        <button class="btn btn-danger btn-sm" id="clear-history">Clear All</button>
+        <button class="btn btn-secondary btn-sm" id="refresh-history">↻ Refresh</button>
+      </div>
+      <div id="history-container">
+        <table>
+          <thead><tr><th>Task</th><th>Started</th><th>Exit</th><th></th></tr></thead>
+          <tbody id="history-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- LLM Tab -->
+  <div id="tab-llm" class="tab">
+    <div class="card">
+      <h3 style="margin-top:0">LM Studio Connection</h3>
+      <p><span class="lbl">Endpoint:</span> <span class="endpoint-chip" id="llm-endpoint">—</span></p>
+      <p><span class="lbl">Status:</span> <span id="llm-status-text">Checking…</span></p>
+      <button class="btn btn-secondary btn-sm" id="refresh-llm">↻ Refresh</button>
+    </div>
+    <div class="card" id="models-card">
+      <h3 style="margin-top:0">Available Models</h3>
+      <ul class="model-list" id="model-list"><li style="color:#64748b">No models found</li></ul>
+    </div>
+  </div>
+
+  <!-- Metrics Tab -->
+  <div id="tab-metrics" class="tab">
+    <div class="card">
+      <h3 style="margin-top:0">Overview</h3>
+      <div class="metric-grid">
+        <div class="metric-box"><div class="val" id="m-tasks">—</div><div class="lbl">Total Tasks</div></div>
+        <div class="metric-box"><div class="val" id="m-errors">—</div><div class="lbl">Errors</div></div>
+        <div class="metric-box"><div class="val" id="m-last">—</div><div class="lbl">Last Run</div></div>
+        <div class="metric-box"><div class="val" id="m-lm">—</div><div class="lbl">LM Studio</div></div>
+      </div>
+      <div style="margin-top:1rem;">
+        <button class="btn btn-secondary btn-sm" id="refresh-metrics">↻ Refresh</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Tab -->
+  <div id="tab-settings" class="tab">
+    <div class="card">
+      <h3 style="margin-top:0">GitHub SSH Public Key</h3>
+      <p style="font-size:0.85rem;color:#94a3b8;">Add this key to your GitHub account to enable pushes from the sandbox workspace. No tokens required.</p>
+      <button class="btn btn-secondary btn-sm" id="load-key">Load Public Key</button>
+      <pre id="pub-key-output" style="margin-top:0.75rem; display:none;"></pre>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">LM Studio Setup</h3>
+      <p style="font-size:0.85rem;color:#94a3b8;">RamClaw uses LM Studio as its only LLM provider. Start LM Studio locally and enable the local server at the endpoint shown in the LLM tab (default <code>http://127.0.0.1:1234/v1</code>).</p>
+      <p style="font-size:0.85rem;color:#94a3b8;">Load a model in LM Studio, then check the LLM tab for connection status.</p>
+    </div>
+  </div>
+
   <script src="script.js"></script>
 </body>
 </html>

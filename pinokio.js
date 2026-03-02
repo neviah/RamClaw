@@ -22,40 +22,38 @@ module.exports = {
 				icon: 'fa-solid fa-plug',
 				text: 'Installing',
 				href: 'install.js'
-			}, {
-				icon: 'fa-solid fa-terminal',
-				text: 'Update',
-				href: 'update.js'
 			}];
 		}
 
 		if (installed) {
 			if (running.start) {
 				const local = info.local('start.js');
-				if (local && local.url) {
-					return [{
+				const webUrl = (local && local.url) ? local.url : 'http://localhost:3000';
+				return [
+					{
 						default: true,
-						icon: 'fa-solid fa-rocket',
-						text: 'Open RamClaw',
-						href: local.url + '?ts=' + Date.now()
-					}, {
+						icon: 'fa-solid fa-display',
+						text: 'Open Web UI',
+						href: webUrl
+					},
+					{
+						icon: 'fa-solid fa-stop',
+						text: 'Stop',
+						href: 'start.js',
+						action: 'stop'
+					},
+					{
 						icon: 'fa-solid fa-terminal',
 						text: 'Terminal',
 						href: 'start.js'
-					}];
-				}
-				return [{
-					default: true,
-					icon: 'fa-solid fa-terminal',
-					text: 'Terminal',
-					href: 'start.js'
-				}];
+					}
+				];
 			}
 
 			if (running.update) {
 				return [{
 					default: true,
-					icon: 'fa-solid fa-terminal',
+					icon: 'fa-solid fa-arrows-rotate',
 					text: 'Updating',
 					href: 'update.js'
 				}];
@@ -70,7 +68,7 @@ module.exports = {
 					href: 'start.js?ts=' + Date.now()
 				},
 				{
-					icon: 'fa-solid fa-plug',
+					icon: 'fa-solid fa-arrows-rotate',
 					text: 'Update',
 					href: 'update.js'
 				},
@@ -98,10 +96,6 @@ module.exports = {
 			icon: 'fa-solid fa-plug',
 			text: 'Install',
 			href: 'install.js'
-		}, {
-			icon: 'fa-solid fa-terminal',
-			text: 'Update',
-			href: 'update.js'
 		}];
 	}
 };
