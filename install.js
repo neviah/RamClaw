@@ -12,7 +12,7 @@ module.exports = {
       }
     },
     {
-      when: "{{!exists('sandbox/venv')}}",
+      when: "{{!exists('sandbox/venv/Scripts/python.exe')}}",
       method: 'shell.run',
       params: {
         message: [
@@ -23,12 +23,21 @@ module.exports = {
     {
       method: 'shell.run',
       params: {
+        venv: 'sandbox/venv',
         message: [
-          '".\\sandbox\\venv\\Scripts\\python.exe" -m pip install --upgrade pip',
-          '".\\sandbox\\venv\\Scripts\\python.exe" -m pip install ./openclaw',
-          '".\\sandbox\\venv\\Scripts\\python.exe" -m pip install playwright gitpython',
-          '".\\sandbox\\venv\\Scripts\\python.exe" -m playwright install chromium',
-          'node create_sandbox.js'
+          'python -m pip install --upgrade pip',
+          'python -m pip install ./openclaw',
+          'python -m pip install playwright gitpython',
+          'python -m playwright install chromium'
+        ]
+      }
+    },
+    {
+      method: 'shell.run',
+      params: {
+        message: [
+          'node create_sandbox.js',
+          'echo RamClaw install completed.'
         ]
       }
     }
