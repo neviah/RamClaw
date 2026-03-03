@@ -11,6 +11,7 @@ const exportTaskBtn = document.getElementById('exportTask');
 const historyActionStatusEl = document.getElementById('historyActionStatus');
 const taskEl = document.getElementById('task');
 const runBtn = document.getElementById('run');
+const stopBtn = document.getElementById('stop');
 const taskStatusEl = document.getElementById('taskStatus');
 const keyBtn = document.getElementById('showKey');
 const publicKeyEl = document.getElementById('publicKey');
@@ -19,6 +20,8 @@ const llmEndpointEl = document.getElementById('llmEndpoint');
 const llmStatusEl = document.getElementById('llmStatus');
 const llmCheckedEl = document.getElementById('llmChecked');
 const refreshLlmBtn = document.getElementById('refreshLlm');
+const llmPillEl = document.getElementById('llmPill');
+const llmPillTextEl = document.getElementById('llmPillText');
 const kpiEl = document.getElementById('kpi');
 const githubIntegrationEl = document.getElementById('githubIntegrationStatus');
 const telegramIntegrationEl = document.getElementById('telegramIntegrationStatus');
@@ -38,6 +41,7 @@ let appState = {
 };
 let selectedTaskId = null;
 let selectedTask = null;
+let currentRunningTaskId = null;
 
 workspaceLink.href = '/workspace';
 
@@ -53,9 +57,13 @@ function formatTs(ts) {
 }
 
 function addChatLine(container, entry) {
+  const message = entry.message || '';
+  if (message.trim() === '<think>' || message.trim() === '</think>') {
+    return;
+  }
   const line = document.createElement('div');
   line.className = 'chat-line';
-  line.innerHTML = `<small>${formatTs(entry.ts)}</small><span class="tag">[${entry.type}]</span>${escapeHtml(entry.message)}`;
+  line.innerHTML = `<small>${formatTs(entry.ts)}</small><span class="tag">[${entry.type}]</span>${escapeHtml(message)}`;
   container.appendChild(line);
   container.scrollTop = container.scrollHeight;
 }
@@ -204,6 +212,15 @@ function renderLlm(llm) {
   llmEndpointEl.textContent = llm.endpoint || '-';
   llmStatusEl.textContent = llm.reachable ? 'Reachable' : 'Unreachable';
   llmCheckedEl.textContent = llm.lastCheckedAt ? `Last check: ${new Date(llm.lastCheckedAt).toLocaleString()}` : 'Last check: -';
+
+  llmPillEl.classList.remove('ok', 'warn');
+  if (llm.reachable) {
+    llmPillEl.classList.add('ok');
+    llmPillTextEl.textContent = 'LLM Connected';
+  } else {
+    llmPillEl.classList.add('warn');
+    llmPillTextEl.textContent = 'LLM Disconnected';
+  }
 }
 
 function renderMetrics(metrics) {
@@ -308,7 +325,9 @@ async function runTask() {
   const task = taskEl.value.trim();
   if (!task) return;
   runBtn.disabled = true;
+  stopBtn.disabled = false;
   taskStatusEl.textContent = 'Running...';
+  currentRunningTaskId = null;
   const res = await fetch('/api/task', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -327,8 +346,34 @@ async function runTask() {
     });
   }
   runBtn.disabled = false;
+  stopBtn.disabled = true;
   taskStatusEl.textContent = 'Idle';
+  currentRunningTaskId = null;
   await refreshState();
+}
+
+async function stopRunningTask() {
+  stopBtn.disabled = true;
+  taskStatusEl.textContent = 'Stopping...';
+  try {
+    const payload = currentRunningTaskId ? { taskId: currentRunningTaskId } : {};
+    const res = await fetch('/api/task/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      taskStatusEl.textContent = 'Stopped';
+      currentRunningTaskId = null;
+    } else {
+      taskStatusEl.textContent = data.message || 'No running task';
+    }
+  } catch (err) {
+    taskStatusEl.textContent = `Stop failed: ${err.message}`;
+  } finally {
+    await refreshState();
+  }
 }
 
 async function refreshPublicKey() {
@@ -399,6 +444,18 @@ function initEventStream() {
         message: `#${data.taskId || '-'} ${data.message || ''}`
       });
 
+      if (data.status === 'running' && data.taskId) {
+        currentRunningTaskId = data.taskId;
+        stopBtn.disabled = false;
+        taskStatusEl.textContent = `Running (Task #${data.taskId})`;
+      }
+
+      if ((data.status === 'failed' || data.status === 'succeeded') && data.taskId === currentRunningTaskId) {
+        currentRunningTaskId = null;
+        stopBtn.disabled = true;
+        taskStatusEl.textContent = 'Idle';
+      }
+
       if (selectedTaskId && data.taskId === selectedTaskId) {
         addChatLine(historyChatEl, {
           ts: data.ts,
@@ -414,6 +471,7 @@ function initEventStream() {
 }
 
 runBtn.addEventListener('click', runTask);
+stopBtn.addEventListener('click', stopRunningTask);
 
 [historySearchEl, historyStatusEl, historyRangeEl, historyTagEl].forEach((el) => {
   el.addEventListener('input', () => {
@@ -441,6 +499,7 @@ exportTaskBtn.addEventListener('click', exportSelectedTask);
 
 initTabs();
 initTheme();
+stopBtn.disabled = true;
 initEventStream();
 refreshState();
 refreshPublicKey();

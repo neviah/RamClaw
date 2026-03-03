@@ -11,6 +11,7 @@ const LOG_PATH = path.join(SANDBOX_ROOT, 'ramclaw.log');
 const MAX_TASK_HISTORY = 100;
 const MAX_EVENTS_PER_TASK = 500;
 const sseClients = new Set();
+const activeTasks = new Map();
 let pythonRuntimeReady = false;
 
 let nextTaskId = 1;
@@ -491,8 +492,12 @@ function runAgentTask(task, responseStream) {
       USERPROFILE: SANDBOX_ROOT,
       RAMCLAW_CONFIG: CONFIG_PATH,
       PYTHONPATH: mergedPythonPath,
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONUTF8: '1',
     },
   });
+
+  activeTasks.set(taskRun.id, child);
 
   child.stdout.on('data', (chunk) => {
     const text = chunk.toString();
@@ -514,8 +519,11 @@ function runAgentTask(task, responseStream) {
   });
 
   child.on('close', (code) => {
-    const status = code === 0 ? 'succeeded' : 'failed';
-    completeTaskRun(taskRun, status, code, `Task ${taskRun.id} finished with code ${code}`);
+    activeTasks.delete(taskRun.id);
+    if (taskRun.status === 'running') {
+      const status = code === 0 ? 'succeeded' : 'failed';
+      completeTaskRun(taskRun, status, code, `Task ${taskRun.id} finished with code ${code}`);
+    }
     log(`Task ${taskRun.id} finished with code ${code}`);
     if (responseStream && !responseStream.writableEnded) {
       responseStream.end();
@@ -534,9 +542,35 @@ function runPythonCheck(args) {
       USERPROFILE: SANDBOX_ROOT,
       RAMCLAW_CONFIG: CONFIG_PATH,
       PYTHONPATH: OPENCLAW_SRC_ROOT,
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONUTF8: '1',
     },
     encoding: 'utf-8'
   });
+}
+
+function stopTaskById(taskId) {
+  const child = activeTasks.get(taskId);
+  if (!child) {
+    return false;
+  }
+  try {
+    child.kill();
+  } catch (err) {
+  }
+
+  const taskRun = taskHistory.find((entry) => entry.id === taskId);
+  if (taskRun && taskRun.status === 'running') {
+    completeTaskRun(taskRun, 'failed', -1, `Task ${taskId} stopped by user`);
+  }
+  activeTasks.delete(taskId);
+  return true;
+}
+
+function latestRunningTaskId() {
+  const running = taskHistory.filter((entry) => entry.status === 'running');
+  if (!running.length) return null;
+  return running[running.length - 1].id;
 }
 
 function ensurePythonRuntime(taskRun) {
@@ -664,6 +698,35 @@ async function main() {
   const server = http.createServer((req, res) => {
     if (req.url === '/api/task' && req.method === 'POST') {
       readRequestBody(req).then((body) => handleTask(req, res, body)).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (req.url === '/api/task/stop' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = JSON.parse(body || '{}');
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const requested = payload.taskId ? Number(payload.taskId) : null;
+        const targetTaskId = Number.isFinite(requested) && requested > 0 ? requested : latestRunningTaskId();
+        if (!targetTaskId) {
+          writeJson(res, { ok: false, message: 'No running task to stop.' }, 404);
+          return;
+        }
+
+        const stopped = stopTaskById(targetTaskId);
+        writeJson(res, {
+          ok: stopped,
+          taskId: targetTaskId,
+          message: stopped ? `Stopped task ${targetTaskId}.` : `Task ${targetTaskId} is not running.`
+        }, stopped ? 200 : 409);
+      }).catch((err) => {
         writeJson(res, { error: err.message }, 400);
       });
       return;
