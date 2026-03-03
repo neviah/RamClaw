@@ -1027,8 +1027,9 @@ async function main() {
     serveStatic(req, res);
   });
 
-  const port = process.env.PORT || 3000;
-  server.listen(port, () => log(`RamClaw UI running at http://localhost:${port}`));
+  const port = Number(process.env.PORT || 3000);
+  const host = process.env.HOST || '0.0.0.0';
+  server.listen(port, host, () => log(`RamClaw UI running at http://localhost:${port}`));
 }
 
 main().catch((err) => {

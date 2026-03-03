@@ -1,14 +1,14 @@
 import json
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, List, Union
 
 
 class NpmTool:
     def __init__(self, workspace: str):
         self.workspace = Path(workspace)
 
-    def install(self, packages: str | list[str] = "", save_dev: bool = False) -> dict[str, Any]:
+    def install(self, packages: Union[str, List[str]] = "", save_dev: bool = False) -> dict[str, Any]:
         """Install npm packages. If no packages specified, runs npm install"""
         try:
             cmd = ["npm", "install"]
@@ -18,7 +18,7 @@ class NpmTool:
                 if packages:
                     packages = packages.split()
             elif isinstance(packages, list):
-                packages = packages
+                packages = [str(pkg) for pkg in packages]
             else:
                 packages = []
             
@@ -56,7 +56,7 @@ class NpmTool:
                 "exit_code": -1,
             }
 
-    def list(self) -> dict[str, Any]:
+    def list_packages(self) -> dict[str, Any]:
         """List installed packages"""
         try:
             result = subprocess.run(
@@ -84,12 +84,12 @@ class NpmTool:
     def run(
         self,
         action: str,
-        packages: str | list[str] = "",
+        packages: Union[str, List[str]] = "",
         save_dev: bool = False,
         **_: Any,
     ) -> dict[str, Any]:
         if action == "install":
             return self.install(packages=packages, save_dev=save_dev)
         elif action == "list":
-            return self.list()
+            return self.list_packages()
         raise ValueError(f"Unsupported npm action: {action}")

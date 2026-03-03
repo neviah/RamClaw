@@ -136,8 +136,11 @@
 
     <div class="panel">
       <div class="header">
-        <div>
+        <div style="display:flex; align-items:center; gap:0.65rem;">
+          <img src="/assets/logo-transparent.png" alt="RamClaw logo" style="width:36px; height:36px; object-fit:contain;" onerror="this.style.display='none';" />
           <h1 class="title-main">RamClaw Dashboard</h1>
+        </div>
+        <div>
           <div class="muted title-sub">Sandboxed, LM Studio only, live action telemetry.</div>
         </div>
         <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
@@ -158,9 +161,9 @@
           </div>
           <span id="taskStatus" class="muted">Idle</span>
         </div>
-        <div style="display:flex; gap:0.5rem; align-items:center; justify-content:space-between;">
+        <div style="display:flex; gap:0.4rem; align-items:center; justify-content:flex-start; margin-top:0.6rem;">
           <h3 style="margin:0;">Live Task Chat</h3>
-          <button id="copyChatBtn" class="secondary" title="Copy chat content" style="padding:0.4rem 0.6rem; font-size:0.85rem;">📋 Copy</button>
+          <button id="copyChatBtn" class="secondary" title="Copy chat content" style="padding:0.28rem 0.5rem; font-size:0.8rem; line-height:1;">📋</button>
         </div>
         <div id="liveChat" class="chat"></div>
       </section>

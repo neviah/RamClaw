@@ -135,12 +135,17 @@ function copyLiveChatContent() {
   });
   
   const text = lines.join('\n');
+  if (!text.trim()) {
+    return;
+  }
   navigator.clipboard.writeText(text).then(() => {
-    const btn = document.getElementById('copyChatBtn');
-    const originalText = btn.textContent;
-    btn.textContent = '✓ Copied!';
+    if (!copyChatBtn) {
+      return;
+    }
+    const originalText = copyChatBtn.textContent;
+    copyChatBtn.textContent = '✓';
     setTimeout(() => {
-      btn.textContent = originalText;
+      copyChatBtn.textContent = originalText;
     }, 2000);
   }).catch((err) => {
     console.error('Failed to copy:', err);
@@ -561,7 +566,9 @@ runBtn.addEventListener('click', runTask);
 runSmokeBtn.addEventListener('click', runSmokeTask);
 runBrowserSmokeBtn.addEventListener('click', runBrowserSmokeTask);
 stopBtn.addEventListener('click', stopRunningTask);
-copyChatBtn.addEventListener('click', copyLiveChatContent);
+if (copyChatBtn) {
+  copyChatBtn.addEventListener('click', copyLiveChatContent);
+}
 
 [historySearchEl, historyStatusEl, historyRangeEl, historyTagEl].forEach((el) => {
   el.addEventListener('input', () => {
