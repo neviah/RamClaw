@@ -7,13 +7,399 @@ const SANDBOX_ROOT = path.join(__dirname, 'sandbox');
 const WEBUI_ROOT = path.join(__dirname, 'webui');
 const CONFIG_PATH = path.join(SANDBOX_ROOT, 'config.json');
 const LOG_PATH = path.join(SANDBOX_ROOT, 'ramclaw.log');
+const MAX_TASK_HISTORY = 100;
+const MAX_EVENTS_PER_TASK = 500;
+const sseClients = new Set();
+
+let nextTaskId = 1;
+const taskHistory = [];
+let appConfig = null;
+const appState = {
+  llm: {
+    endpoint: 'http://127.0.0.1:1234/v1',
+    reachable: false,
+    lastCheckedAt: null
+  }
+};
 
 const logStream = fs.createWriteStream(LOG_PATH, { flags: 'a' });
 
 function log(message) {
-  const line = `[${new Date().toISOString()}] ${message}\n`;
+  const safeMessage = redactSensitive(message);
+  const line = `[${new Date().toISOString()}] ${safeMessage}\n`;
   process.stdout.write(line);
   logStream.write(line);
+}
+
+function getConfiguredSecrets() {
+  const cfg = appConfig || {};
+  const integrations = cfg.integrations || {};
+  const secrets = [];
+
+  const githubToken = integrations.github && integrations.github.token;
+  const telegramToken = integrations.telegram && integrations.telegram.botToken;
+  const whatsappToken = integrations.whatsapp && integrations.whatsapp.accessToken;
+
+  if (githubToken) secrets.push(githubToken);
+  if (telegramToken) secrets.push(telegramToken);
+  if (whatsappToken) secrets.push(whatsappToken);
+
+  return secrets.filter(Boolean);
+}
+
+function redactSensitive(input) {
+  if (input === null || input === undefined) {
+    return '';
+  }
+
+  let text = String(input);
+  getConfiguredSecrets().forEach((secret) => {
+    if (secret) {
+      text = text.split(secret).join('[REDACTED]');
+    }
+  });
+
+  text = text.replace(/(Bearer\s+)[A-Za-z0-9._-]{12,}/gi, '$1[REDACTED]');
+  text = text.replace(/\bghp_[A-Za-z0-9]{20,}\b/g, '[REDACTED]');
+  text = text.replace(/\b[0-9]{8,}:[A-Za-z0-9_-]{20,}\b/g, '[REDACTED]');
+  text = text.replace(/\bEA[A-Za-z0-9]{16,}\b/g, '[REDACTED]');
+
+  return text;
+}
+
+function inferPhase(type, message) {
+  const msg = (message || '').toLowerCase();
+  if (type === 'stderr') return 'error';
+  if (type === 'system' && msg.includes('started')) return 'planning';
+  if (type === 'system' && (msg.includes('finished') || msg.includes('interrupted'))) return 'finish';
+  if (/tool|action|step|invoke|execute|command/.test(msg)) return 'action';
+  if (/file|write|edit|mkdir|folder|path|workspace|read/.test(msg)) return 'file';
+  return 'execution';
+}
+
+function broadcastEvent(event) {
+  const payload = JSON.stringify({
+    ...event,
+    ts: event.ts || new Date().toISOString()
+  });
+  sseClients.forEach((res) => {
+    try {
+      res.write(`data: ${payload}\n\n`);
+    } catch (err) {
+      sseClients.delete(res);
+    }
+  });
+}
+
+function appendTaskEvent(taskRun, type, message) {
+  const safeMessage = redactSensitive(message);
+  const phase = inferPhase(type, safeMessage);
+  const event = {
+    ts: new Date().toISOString(),
+    type,
+    phase,
+    message: safeMessage
+  };
+  taskRun.events.push(event);
+  if (taskRun.events.length > MAX_EVENTS_PER_TASK) {
+    taskRun.events.shift();
+  }
+  broadcastEvent({
+    event: 'task-event',
+    taskId: taskRun.id,
+    task: taskRun.task,
+    status: taskRun.status,
+    ...event
+  });
+}
+
+function summarizeTask(taskRun) {
+  const text = `${taskRun.task}\n${taskRun.events.map((ev) => ev.message).join('\n')}`.toLowerCase();
+  const keywords = ['github', 'telegram', 'whatsapp', 'gmail', 'discord', 'browser', 'file', 'git'];
+  const tags = keywords.filter((tag) => text.includes(tag));
+  return {
+    id: taskRun.id,
+    source: taskRun.source || 'task',
+    task: taskRun.task,
+    status: taskRun.status,
+    startedAt: taskRun.startedAt,
+    finishedAt: taskRun.finishedAt,
+    exitCode: taskRun.exitCode,
+    durationMs: taskRun.finishedAt ? (new Date(taskRun.finishedAt).getTime() - new Date(taskRun.startedAt).getTime()) : null,
+    eventCount: taskRun.events.length,
+    preview: taskRun.events.slice(-4).map((ev) => ev.message).join('\n').slice(0, 500),
+    tags
+  };
+}
+
+function getMetrics() {
+  let totalDuration = 0;
+  let completedCount = 0;
+  let success = 0;
+  let failed = 0;
+  let running = 0;
+
+  taskHistory.forEach((taskRun) => {
+    if (taskRun.status === 'running') {
+      running += 1;
+      return;
+    }
+
+    if (taskRun.exitCode === 0) {
+      success += 1;
+    } else {
+      failed += 1;
+    }
+
+    if (taskRun.finishedAt) {
+      totalDuration += new Date(taskRun.finishedAt).getTime() - new Date(taskRun.startedAt).getTime();
+      completedCount += 1;
+    }
+  });
+
+  return {
+    totalTasks: taskHistory.length,
+    runningTasks: running,
+    succeededTasks: success,
+    failedTasks: failed,
+    averageDurationMs: completedCount ? Math.round(totalDuration / completedCount) : 0
+  };
+}
+
+function integrationStatus() {
+  const cfg = appConfig || {};
+  const integrations = cfg.integrations || {};
+  const githubKeyPath = path.join(SANDBOX_ROOT, '.ssh', 'id_rsa.pub');
+  return {
+    github: {
+      publicKeyPresent: fs.existsSync(githubKeyPath),
+      configured: !!integrations.github,
+      notes: 'Uses sandbox SSH key by default; add key to GitHub account.'
+    },
+    telegram: {
+      configured: !!(integrations.telegram && integrations.telegram.botToken && integrations.telegram.chatId),
+      notes: 'Set integrations.telegram.botToken and chatId in sandbox/config.json to enable.'
+    },
+    whatsapp: {
+      configured: !!(integrations.whatsapp && (integrations.whatsapp.accessToken || integrations.whatsapp.sessionPath)),
+      notes: 'Set integrations.whatsapp credentials/session in sandbox/config.json to enable.'
+    }
+  };
+}
+
+function writeJson(res, payload, statusCode = 200) {
+  res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(payload));
+}
+
+function createTaskRun(task, source = 'task', meta = {}) {
+  const taskRun = {
+    id: nextTaskId++,
+    source,
+    task,
+    status: 'running',
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    exitCode: null,
+    events: [],
+    meta
+  };
+  taskHistory.push(taskRun);
+  if (taskHistory.length > MAX_TASK_HISTORY) {
+    taskHistory.shift();
+  }
+  return taskRun;
+}
+
+function completeTaskRun(taskRun, status, exitCode, message) {
+  taskRun.status = status;
+  taskRun.exitCode = exitCode;
+  taskRun.finishedAt = new Date().toISOString();
+  appendTaskEvent(taskRun, 'system', message);
+}
+
+function readRequestBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > 1024 * 1024) {
+        reject(new Error('Request body too large'));
+      }
+    });
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 6000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeout);
+    return response;
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
+  }
+}
+
+async function testGithubIntegration() {
+  const status = integrationStatus().github;
+  const githubCfg = (appConfig && appConfig.integrations && appConfig.integrations.github) || {};
+  if (!status.publicKeyPresent && !githubCfg.token) {
+    return {
+      provider: 'github',
+      ok: false,
+      message: 'No SSH key or token configured.',
+      testedAt: new Date().toISOString()
+    };
+  }
+
+  if (githubCfg.token) {
+    try {
+      const resp = await fetchWithTimeout('https://api.github.com/user', {
+        headers: {
+          Authorization: `Bearer ${githubCfg.token}`,
+          'User-Agent': 'RamClaw'
+        }
+      });
+      if (!resp.ok) {
+        return {
+          provider: 'github',
+          ok: false,
+          message: `GitHub token test failed with HTTP ${resp.status}.`,
+          testedAt: new Date().toISOString()
+        };
+      }
+      const body = await resp.json();
+      return {
+        provider: 'github',
+        ok: true,
+        message: `Connected as ${body.login || 'GitHub user'}.`,
+        testedAt: new Date().toISOString()
+      };
+    } catch (err) {
+      return {
+        provider: 'github',
+        ok: false,
+        message: `GitHub token test error: ${redactSensitive(err.message)}`,
+        testedAt: new Date().toISOString()
+      };
+    }
+  }
+
+  return {
+    provider: 'github',
+    ok: true,
+    message: 'SSH key detected. Add it to GitHub and test by performing a push/pull task.',
+    testedAt: new Date().toISOString()
+  };
+}
+
+async function testTelegramIntegration() {
+  const telegramCfg = (appConfig && appConfig.integrations && appConfig.integrations.telegram) || {};
+  if (!telegramCfg.botToken || !telegramCfg.chatId) {
+    return {
+      provider: 'telegram',
+      ok: false,
+      message: 'Missing botToken or chatId in integrations.telegram.',
+      testedAt: new Date().toISOString()
+    };
+  }
+
+  try {
+    const resp = await fetchWithTimeout(`https://api.telegram.org/bot${telegramCfg.botToken}/getMe`);
+    const body = await resp.json();
+    if (!resp.ok || !body.ok) {
+      return {
+        provider: 'telegram',
+        ok: false,
+        message: `Telegram test failed: ${(body && body.description) ? body.description : `HTTP ${resp.status}`}`,
+        testedAt: new Date().toISOString()
+      };
+    }
+    return {
+      provider: 'telegram',
+      ok: true,
+      message: `Telegram bot reachable: @${(body.result && body.result.username) || 'unknown'}`,
+      testedAt: new Date().toISOString()
+    };
+  } catch (err) {
+    return {
+      provider: 'telegram',
+      ok: false,
+      message: `Telegram test error: ${redactSensitive(err.message)}`,
+      testedAt: new Date().toISOString()
+    };
+  }
+}
+
+async function testWhatsappIntegration() {
+  const whatsappCfg = (appConfig && appConfig.integrations && appConfig.integrations.whatsapp) || {};
+  if (whatsappCfg.accessToken && whatsappCfg.phoneNumberId) {
+    try {
+      const resp = await fetchWithTimeout(`https://graph.facebook.com/v21.0/${whatsappCfg.phoneNumberId}`, {
+        headers: {
+          Authorization: `Bearer ${whatsappCfg.accessToken}`
+        }
+      });
+      if (!resp.ok) {
+        return {
+          provider: 'whatsapp',
+          ok: false,
+          message: `WhatsApp Graph API test failed with HTTP ${resp.status}.`,
+          testedAt: new Date().toISOString()
+        };
+      }
+      return {
+        provider: 'whatsapp',
+        ok: true,
+        message: 'WhatsApp Graph API reachable.',
+        testedAt: new Date().toISOString()
+      };
+    } catch (err) {
+      return {
+        provider: 'whatsapp',
+        ok: false,
+        message: `WhatsApp test error: ${redactSensitive(err.message)}`,
+        testedAt: new Date().toISOString()
+      };
+    }
+  }
+
+  if (whatsappCfg.sessionPath) {
+    const sessionPath = path.isAbsolute(whatsappCfg.sessionPath)
+      ? whatsappCfg.sessionPath
+      : path.join(SANDBOX_ROOT, whatsappCfg.sessionPath);
+    const exists = fs.existsSync(sessionPath);
+    return {
+      provider: 'whatsapp',
+      ok: exists,
+      message: exists ? 'WhatsApp local session path exists.' : 'WhatsApp session path does not exist.',
+      testedAt: new Date().toISOString()
+    };
+  }
+
+  return {
+    provider: 'whatsapp',
+    ok: false,
+    message: 'Missing integrations.whatsapp config (accessToken + phoneNumberId or sessionPath).',
+    testedAt: new Date().toISOString()
+  };
+}
+
+async function testIntegration(provider) {
+  if (provider === 'github') return testGithubIntegration();
+  if (provider === 'telegram') return testTelegramIntegration();
+  if (provider === 'whatsapp') return testWhatsappIntegration();
+  return {
+    provider,
+    ok: false,
+    message: 'Unknown integration provider.',
+    testedAt: new Date().toISOString()
+  };
 }
 
 function venvPython() {
@@ -72,6 +458,83 @@ function serveStatic(req, res) {
   });
 }
 
+function runAgentTask(task, responseStream) {
+  const taskRun = createTaskRun(task, 'task');
+  log(`Task ${taskRun.id} started: ${task}`);
+  appendTaskEvent(taskRun, 'system', `Task ${taskRun.id} started`);
+
+  const child = spawn(venvPython(), ['-m', 'openclaw.agent', task], {
+    cwd: SANDBOX_ROOT,
+    env: {
+      ...process.env,
+      HOME: SANDBOX_ROOT,
+      USERPROFILE: SANDBOX_ROOT,
+      RAMCLAW_CONFIG: CONFIG_PATH,
+    },
+  });
+
+  child.stdout.on('data', (chunk) => {
+    const text = chunk.toString();
+    const safeText = redactSensitive(text);
+    if (responseStream && !responseStream.writableEnded) {
+      responseStream.write(safeText);
+    }
+    appendTaskEvent(taskRun, 'stdout', text);
+  });
+
+  child.stderr.on('data', (chunk) => {
+    const text = chunk.toString();
+    log(`Task ${taskRun.id} stderr: ${text.trim()}`);
+    const safeText = redactSensitive(text);
+    if (responseStream && !responseStream.writableEnded) {
+      responseStream.write(`\n[err] ${safeText}`);
+    }
+    appendTaskEvent(taskRun, 'stderr', text);
+  });
+
+  child.on('close', (code) => {
+    const status = code === 0 ? 'succeeded' : 'failed';
+    completeTaskRun(taskRun, status, code, `Task ${taskRun.id} finished with code ${code}`);
+    log(`Task ${taskRun.id} finished with code ${code}`);
+    if (responseStream && !responseStream.writableEnded) {
+      responseStream.end();
+    }
+  });
+
+  return { taskRun, child };
+}
+
+function recordIntegrationTestInHistory(result) {
+  const taskRun = createTaskRun(`[integration] ${result.provider} connection test`, 'integration-test', {
+    provider: result.provider
+  });
+  appendTaskEvent(taskRun, 'system', `Integration test started: ${result.provider}`);
+  appendTaskEvent(taskRun, result.ok ? 'stdout' : 'stderr', result.message);
+  completeTaskRun(
+    taskRun,
+    result.ok ? 'succeeded' : 'failed',
+    result.ok ? 0 : 1,
+    `Integration test finished: ${result.provider} (${result.ok ? 'pass' : 'fail'})`
+  );
+}
+
+function exportTaskTranscript(taskRun) {
+  const lines = [];
+  lines.push(`Task #${taskRun.id}`);
+  lines.push(`Source: ${taskRun.source || 'task'}`);
+  lines.push(`Prompt: ${taskRun.task}`);
+  lines.push(`Status: ${taskRun.status}`);
+  lines.push(`Started: ${taskRun.startedAt}`);
+  lines.push(`Finished: ${taskRun.finishedAt || ''}`);
+  lines.push(`Exit Code: ${taskRun.exitCode}`);
+  lines.push('');
+  lines.push('Events:');
+  taskRun.events.forEach((event) => {
+    lines.push(`[${event.ts}] [${event.phase || 'execution'}] [${event.type}] ${event.message}`);
+  });
+  return lines.join('\n');
+}
+
 function handleTask(req, res, body) {
   try {
     const { task } = JSON.parse(body || '{}');
@@ -82,28 +545,13 @@ function handleTask(req, res, body) {
     }
 
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    const child = spawn(venvPython(), ['-m', 'openclaw.agent', task], {
-      cwd: SANDBOX_ROOT,
-      env: {
-        ...process.env,
-        HOME: SANDBOX_ROOT,
-        USERPROFILE: SANDBOX_ROOT,
-        RAMCLAW_CONFIG: CONFIG_PATH,
-      },
+    const { taskRun, child } = runAgentTask(task, res);
+    req.on('close', () => {
+      if (taskRun.status === 'running') {
+        child.kill();
+        completeTaskRun(taskRun, 'failed', -1, `Task ${taskRun.id} interrupted by client disconnect`);
+      }
     });
-
-    log(`Task started: ${task}`);
-    child.stdout.on('data', (chunk) => res.write(chunk));
-    child.stderr.on('data', (chunk) => {
-      const text = chunk.toString();
-      log(`Task stderr: ${text.trim()}`);
-      res.write(`\n[err] ${text}`);
-    });
-    child.on('close', (code) => {
-      log(`Task finished with code ${code}`);
-      res.end();
-    });
-    req.on('close', () => child.kill());
   } catch (err) {
     res.writeHead(500);
     res.end(`Task failed: ${err.message}`);
@@ -128,25 +576,166 @@ async function main() {
     process.exit(1);
   }
 
-  const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-  const endpoint = cfg.llm?.endpoint || 'http://127.0.0.1:1234/v1';
+  appConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+  const endpoint = appConfig.llm?.endpoint || 'http://127.0.0.1:1234/v1';
+  appState.llm.endpoint = endpoint;
   const ok = await pingLMStudio(endpoint);
+  appState.llm.reachable = ok;
+  appState.llm.lastCheckedAt = new Date().toISOString();
   if (!ok) {
     log(`Warning: LM Studio is not reachable at ${endpoint}. UI will still start; tasks may fail until LM Studio API is enabled.`);
   }
 
   const server = http.createServer((req, res) => {
     if (req.url === '/api/task' && req.method === 'POST') {
-      let body = '';
-      req.on('data', (chunk) => {
-        body += chunk;
+      readRequestBody(req).then((body) => handleTask(req, res, body)).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
       });
-      req.on('end', () => handleTask(req, res, body));
       return;
     }
 
     if (req.url === '/api/public-key') {
       handlePublicKey(res);
+      return;
+    }
+
+    if (req.url === '/api/state') {
+      writeJson(res, {
+        llm: appState.llm,
+        metrics: getMetrics(),
+        history: taskHistory.slice().reverse().map(summarizeTask),
+        integrations: integrationStatus()
+      });
+      return;
+    }
+
+    if (req.url === '/api/events') {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive'
+      });
+      res.write(': connected\n\n');
+      sseClients.add(res);
+      req.on('close', () => {
+        sseClients.delete(res);
+      });
+      return;
+    }
+
+    if (req.url === '/api/llm/check') {
+      pingLMStudio(appState.llm.endpoint).then((reachable) => {
+        appState.llm.reachable = reachable;
+        appState.llm.lastCheckedAt = new Date().toISOString();
+        writeJson(res, appState.llm);
+      }).catch(() => {
+        appState.llm.reachable = false;
+        appState.llm.lastCheckedAt = new Date().toISOString();
+        writeJson(res, appState.llm);
+      });
+      return;
+    }
+
+    if (req.url === '/api/integrations/test' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = JSON.parse(body || '{}');
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        testIntegration(payload.provider).then((result) => {
+          recordIntegrationTestInHistory(result);
+          writeJson(res, result);
+        }).catch((err) => {
+          writeJson(res, {
+            provider: payload.provider,
+            ok: false,
+            message: `Integration test failed: ${redactSensitive(err.message)}`,
+            testedAt: new Date().toISOString()
+          }, 500);
+        });
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (req.url === '/api/task/rerun' && req.method === 'POST') {
+      readRequestBody(req).then((body) => {
+        let payload = {};
+        try {
+          payload = JSON.parse(body || '{}');
+        } catch (err) {
+          writeJson(res, { error: 'Invalid JSON body' }, 400);
+          return;
+        }
+
+        const taskId = Number(payload.taskId);
+        const existing = taskHistory.find((entry) => entry.id === taskId);
+        if (!existing) {
+          writeJson(res, { error: 'Task not found' }, 404);
+          return;
+        }
+
+        if (existing.source === 'integration-test') {
+          const provider = existing.meta && existing.meta.provider;
+          testIntegration(provider).then((result) => {
+            recordIntegrationTestInHistory(result);
+            writeJson(res, {
+              ok: true,
+              rerunType: 'integration-test',
+              result
+            });
+          }).catch((err) => {
+            writeJson(res, {
+              ok: false,
+              error: redactSensitive(err.message)
+            }, 500);
+          });
+          return;
+        }
+
+        const { taskRun } = runAgentTask(existing.task, null);
+        writeJson(res, {
+          ok: true,
+          rerunType: 'task',
+          taskId: taskRun.id,
+          message: 'Task rerun queued.'
+        });
+      }).catch((err) => {
+        writeJson(res, { error: err.message }, 400);
+      });
+      return;
+    }
+
+    if (req.url && req.url.startsWith('/api/history/') && req.url.endsWith('/export')) {
+      const parts = req.url.split('/').filter(Boolean);
+      const id = Number(parts[2]);
+      const taskRun = taskHistory.find((entry) => entry.id === id);
+      if (!taskRun) {
+        writeJson(res, { error: 'Task not found' }, 404);
+        return;
+      }
+      const transcript = exportTaskTranscript(taskRun);
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': `attachment; filename="ramclaw-task-${id}.txt"`
+      });
+      res.end(transcript);
+      return;
+    }
+
+    if (req.url && req.url.startsWith('/api/history/')) {
+      const id = Number(req.url.split('/').pop());
+      const taskRun = taskHistory.find((entry) => entry.id === id);
+      if (!taskRun) {
+        writeJson(res, { error: 'Task not found' }, 404);
+        return;
+      }
+      writeJson(res, taskRun);
       return;
     }
 

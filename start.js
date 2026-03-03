@@ -3,6 +3,12 @@
 module.exports = {
   run: [
     {
+      method: 'local.set',
+      params: {
+        url: 'http://127.0.0.1:3000'
+      }
+    },
+    {
       when: "{{!exists('sandbox/config.json')}}",
       method: 'shell.run',
       params: {

@@ -5,28 +5,169 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RamClaw</title>
   <style>
-    body { font-family: sans-serif; margin: 2rem; background: #0f172a; color: #e2e8f0; }
-    .panel { max-width: 960px; margin: 0 auto; padding: 1.5rem; border: 1px solid #1e293b; border-radius: 12px; background: linear-gradient(135deg, #111827, #0b1224); }
-    textarea { width: 100%; height: 120px; margin-top: 0.5rem; background: #0b1224; color: #e2e8f0; border: 1px solid #1e293b; border-radius: 8px; padding: 0.75rem; }
-    button { background: #22d3ee; color: #0b1224; border: none; padding: 0.75rem 1.25rem; border-radius: 8px; cursor: pointer; font-weight: 700; }
+    body { font-family: sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    .layout { max-width: 1200px; margin: 1.5rem auto; padding: 0 1rem; }
+    .panel { border: 1px solid #1e293b; border-radius: 12px; background: linear-gradient(135deg, #111827, #0b1224); overflow: hidden; }
+    .header { display: flex; justify-content: space-between; gap: 1rem; align-items: center; padding: 1rem 1.25rem; border-bottom: 1px solid #1e293b; }
+    .tabs { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .tab-btn { background: #0b1224; color: #e2e8f0; border: 1px solid #1e293b; padding: 0.5rem 0.8rem; border-radius: 8px; cursor: pointer; }
+    .tab-btn.active { background: #22d3ee; color: #0b1224; border-color: #22d3ee; font-weight: 700; }
+    .tab { display: none; padding: 1.25rem; }
+    .tab.active { display: block; }
+    textarea { width: 100%; height: 110px; margin-top: 0.5rem; background: #0b1224; color: #e2e8f0; border: 1px solid #1e293b; border-radius: 8px; padding: 0.75rem; }
+    button { background: #22d3ee; color: #0b1224; border: none; padding: 0.65rem 1rem; border-radius: 8px; cursor: pointer; font-weight: 700; }
+    button.secondary { background: #1e293b; color: #e2e8f0; }
     button:disabled { background: #334155; cursor: not-allowed; }
-    pre { background: #0b1224; padding: 1rem; border-radius: 8px; overflow: auto; border: 1px solid #1e293b; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .card { border: 1px solid #1e293b; border-radius: 8px; padding: 0.85rem; background: #0b1224; }
+    .chat { height: 320px; overflow: auto; border: 1px solid #1e293b; border-radius: 8px; background: #020617; padding: 0.75rem; }
+    .chat-line { margin: 0 0 0.5rem 0; white-space: pre-wrap; }
+    .chat-line small { color: #94a3b8; margin-right: 0.5rem; }
+    .chat-line .tag { color: #67e8f9; margin-right: 0.4rem; }
+    .list { max-height: 320px; overflow: auto; border: 1px solid #1e293b; border-radius: 8px; background: #020617; }
+    .list-item { padding: 0.75rem; border-bottom: 1px solid #1e293b; cursor: pointer; }
+    .list-item:hover, .list-item.active { background: #0b1224; }
+    .filter-grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .filter-grid input, .filter-grid select { background: #0b1224; color: #e2e8f0; border: 1px solid #1e293b; border-radius: 8px; padding: 0.55rem 0.6rem; }
+    .timeline { max-height: 240px; overflow: auto; border: 1px solid #1e293b; border-radius: 8px; background: #020617; padding: 0.6rem; margin-bottom: 0.75rem; }
+    .timeline-phase { border: 1px solid #1e293b; border-radius: 8px; padding: 0.5rem; margin-bottom: 0.5rem; background: #0b1224; }
+    .timeline-phase h4 { margin: 0 0 0.4rem 0; font-size: 0.9rem; color: #67e8f9; }
+    .kpi { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 0.75rem; }
+    .kpi .card strong { display: block; font-size: 1.25rem; margin-top: 0.35rem; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     a { color: #38bdf8; }
+    .muted { color: #94a3b8; }
+    @media (max-width: 900px) {
+      .row { grid-template-columns: 1fr; }
+      .kpi { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+      .filter-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-  <div class="panel">
-    <h1>RamClaw</h1>
-    <p>Fully sandboxed, LM Studio only. No cloud providers, no setup required.</p>
-    <label for="task">Task</label>
-    <textarea id="task" placeholder="What should RamClaw do?"></textarea>
-    <div style="margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
-      <button id="run">Run Task</button>
-      <button id="showKey">Show GitHub Public Key</button>
-      <a id="workspaceLink" href="#" target="_blank">Open workspace folder</a>
+  <div class="layout">
+    <div class="panel">
+      <div class="header">
+        <div>
+          <h1 style="margin:0;">RamClaw Dashboard</h1>
+          <div class="muted">Sandboxed, LM Studio only, live action telemetry.</div>
+        </div>
+        <a id="workspaceLink" href="#" target="_blank">Open workspace folder</a>
+      </div>
+
+      <div class="tabs" style="padding: 0.75rem 1.25rem; border-bottom: 1px solid #1e293b;">
+        <button class="tab-btn active" data-tab="taskTab">Task</button>
+        <button class="tab-btn" data-tab="historyTab">History</button>
+        <button class="tab-btn" data-tab="llmTab">LLM</button>
+        <button class="tab-btn" data-tab="metricsTab">Metrics</button>
+        <button class="tab-btn" data-tab="credentialsTab">Credentials</button>
+        <button class="tab-btn" data-tab="integrationsTab">Integrations</button>
+      </div>
+
+      <section id="taskTab" class="tab active">
+        <label for="task">Task</label>
+        <textarea id="task" placeholder="What should RamClaw do?"></textarea>
+        <div style="margin-top: 0.75rem; display:flex; gap:0.5rem; align-items:center; flex-wrap: wrap;">
+          <button id="run">Run Task</button>
+          <span id="taskStatus" class="muted">Idle</span>
+        </div>
+        <h3>Live Task Chat</h3>
+        <div id="liveChat" class="chat"></div>
+      </section>
+
+      <section id="historyTab" class="tab">
+        <div class="row">
+          <div>
+            <h3>Recent Tasks</h3>
+            <div style="display:flex; gap:0.5rem; margin-bottom:0.6rem; flex-wrap:wrap;">
+              <button id="rerunTask" class="secondary">Rerun Selected</button>
+              <button id="exportTask" class="secondary">Export Transcript</button>
+              <span id="historyActionStatus" class="muted"></span>
+            </div>
+            <div class="filter-grid">
+              <input id="historySearch" placeholder="Search tasks/events" />
+              <select id="historyStatus">
+                <option value="all">All status</option>
+                <option value="running">Running</option>
+                <option value="succeeded">Succeeded</option>
+                <option value="failed">Failed</option>
+              </select>
+              <select id="historyRange">
+                <option value="all">All time</option>
+                <option value="24h">Last 24h</option>
+                <option value="7d">Last 7d</option>
+                <option value="30d">Last 30d</option>
+              </select>
+              <select id="historyTag">
+                <option value="all">All tools/integrations</option>
+              </select>
+            </div>
+            <div id="historyList" class="list"></div>
+          </div>
+          <div>
+            <h3>Action Timeline</h3>
+            <div id="historyTimeline" class="timeline"></div>
+            <h3>Task Action Chat</h3>
+            <div id="historyChat" class="chat"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="llmTab" class="tab">
+        <div class="row">
+          <div class="card">
+            <div>Endpoint</div>
+            <div id="llmEndpoint" class="mono" style="margin-top:0.4rem;"></div>
+          </div>
+          <div class="card">
+            <div>Status</div>
+            <div id="llmStatus" style="margin-top:0.4rem;"></div>
+            <div id="llmChecked" class="muted" style="margin-top:0.4rem;"></div>
+            <button id="refreshLlm" class="secondary" style="margin-top:0.6rem;">Re-check LM Studio</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="metricsTab" class="tab">
+        <div id="kpi" class="kpi"></div>
+      </section>
+
+      <section id="credentialsTab" class="tab">
+        <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.75rem;">
+          <button id="showKey">Refresh GitHub Public Key</button>
+        </div>
+        <div class="card">
+          <div>GitHub Public Key</div>
+          <pre id="publicKey" class="mono" style="margin-top:0.6rem; overflow:auto;"></pre>
+        </div>
+      </section>
+
+      <section id="integrationsTab" class="tab">
+        <div class="row">
+          <div class="card" id="githubIntegration">
+            <div id="githubIntegrationStatus"></div>
+            <div style="margin-top:0.75rem;"><button id="testGithub" class="secondary">Test Connection</button></div>
+            <div id="githubTestResult" class="muted" style="margin-top:0.6rem;"></div>
+          </div>
+          <div class="card" id="telegramIntegration">
+            <div id="telegramIntegrationStatus"></div>
+            <div style="margin-top:0.75rem;"><button id="testTelegram" class="secondary">Test Connection</button></div>
+            <div id="telegramTestResult" class="muted" style="margin-top:0.6rem;"></div>
+          </div>
+        </div>
+        <div class="row" style="margin-top:1rem;">
+          <div class="card" id="whatsappIntegration">
+            <div id="whatsappIntegrationStatus"></div>
+            <div style="margin-top:0.75rem;"><button id="testWhatsapp" class="secondary">Test Connection</button></div>
+            <div id="whatsappTestResult" class="muted" style="margin-top:0.6rem;"></div>
+          </div>
+          <div class="card">
+            <strong>How to configure</strong>
+            <div class="muted" style="margin-top:0.5rem;">Edit sandbox/config.json and add integrations.telegram or integrations.whatsapp credentials. Restart RamClaw after changes.</div>
+          </div>
+        </div>
+      </section>
     </div>
-    <h3>Logs</h3>
-    <pre id="log"></pre>
   </div>
   <script src="script.js"></script>
 </body>

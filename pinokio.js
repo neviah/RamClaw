@@ -24,7 +24,7 @@ module.exports = {
 				href: 'install.js'
 			}, {
 				icon: 'fa-solid fa-terminal',
-				text: 'Update',
+				text: 'Update Only',
 				href: 'update.js'
 			}];
 		}
@@ -36,7 +36,7 @@ module.exports = {
 					return [{
 						default: true,
 						icon: 'fa-solid fa-rocket',
-						text: 'Open RamClaw',
+						text: 'OpenWebUI',
 						href: local.url + '?ts=' + Date.now()
 					}, {
 						icon: 'fa-solid fa-terminal',
@@ -56,7 +56,7 @@ module.exports = {
 				return [{
 					default: true,
 					icon: 'fa-solid fa-terminal',
-					text: 'Updating',
+					text: 'Updating (no install/start)',
 					href: 'update.js'
 				}];
 			}
@@ -71,7 +71,7 @@ module.exports = {
 				},
 				{
 					icon: 'fa-solid fa-plug',
-					text: 'Update',
+					text: 'Update Only',
 					href: 'update.js'
 				},
 				{
@@ -83,6 +83,11 @@ module.exports = {
 					icon: 'fa-solid fa-folder-open',
 					text: 'Open Workspace',
 					href: 'sandbox/workspace'
+				},
+				{
+					icon: 'fa-solid fa-sliders',
+					text: 'Integration Config',
+					href: 'sandbox/config.json'
 				},
 				{
 					icon: 'fa-regular fa-key',
@@ -100,7 +105,7 @@ module.exports = {
 			href: 'install.js'
 		}, {
 			icon: 'fa-solid fa-terminal',
-			text: 'Update',
+			text: 'Update Only',
 			href: 'update.js'
 		}];
 	}

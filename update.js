@@ -14,7 +14,7 @@ module.exports = {
       method: 'shell.run',
       params: {
         message: [
-          'echo RamClaw update completed. Run Install to refresh dependencies if needed.'
+          'echo RamClaw update completed. No install or start steps were executed.'
         ]
       }
     }
