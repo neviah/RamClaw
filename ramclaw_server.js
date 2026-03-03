@@ -524,6 +524,9 @@ function runAgentTask(task, responseStream) {
       const status = code === 0 ? 'succeeded' : 'failed';
       completeTaskRun(taskRun, status, code, `Task ${taskRun.id} finished with code ${code}`);
     }
+
+    verifySmokeArtifacts(taskRun);
+
     log(`Task ${taskRun.id} finished with code ${code}`);
     if (responseStream && !responseStream.writableEnded) {
       responseStream.end();
@@ -531,6 +534,59 @@ function runAgentTask(task, responseStream) {
   });
 
   return { taskRun, child };
+}
+
+function isSmokePrompt(taskText) {
+  const text = (taskText || '').toLowerCase();
+  return text.includes('smoke test') || text.includes('healthcheck');
+}
+
+function verifySmokeArtifacts(taskRun) {
+  if (!isSmokePrompt(taskRun.task) || taskRun.source !== 'task') {
+    return;
+  }
+
+  const healthDir = path.join(SANDBOX_ROOT, 'workspace', 'healthcheck');
+  const statusPath = path.join(healthDir, 'status.json');
+  const logPath = path.join(healthDir, 'log.txt');
+
+  const missing = [];
+  if (!fs.existsSync(healthDir)) missing.push('healthcheck directory');
+  if (!fs.existsSync(statusPath)) missing.push('healthcheck/status.json');
+  if (!fs.existsSync(logPath)) missing.push('healthcheck/log.txt');
+
+  if (missing.length) {
+    taskRun.status = 'failed';
+    taskRun.exitCode = taskRun.exitCode === 0 ? 2 : taskRun.exitCode;
+    appendTaskEvent(taskRun, 'stderr', `Filesystem verification failed: missing ${missing.join(', ')}`);
+    appendTaskEvent(taskRun, 'system', 'Filesystem verification verdict: FAIL');
+    return;
+  }
+
+  try {
+    const statusRaw = fs.readFileSync(statusPath, 'utf-8');
+    const statusObj = JSON.parse(statusRaw);
+    const logRaw = fs.readFileSync(logPath, 'utf-8');
+
+    const checksOk = Array.isArray(statusObj.checks) && ['write', 'read', 'list', 'append'].every((name) => statusObj.checks.includes(name));
+    const rootOk = typeof statusObj.writable_root === 'string' && statusObj.writable_root.length > 0;
+    const logOk = logRaw.includes('openclaw smoke test ok');
+
+    if (checksOk && rootOk && logOk) {
+      appendTaskEvent(taskRun, 'system', 'Filesystem verification verdict: PASS (healthcheck artifacts confirmed)');
+      return;
+    }
+
+    taskRun.status = 'failed';
+    taskRun.exitCode = taskRun.exitCode === 0 ? 2 : taskRun.exitCode;
+    appendTaskEvent(taskRun, 'stderr', 'Filesystem verification failed: artifact content did not match expected smoke-test markers');
+    appendTaskEvent(taskRun, 'system', 'Filesystem verification verdict: FAIL');
+  } catch (err) {
+    taskRun.status = 'failed';
+    taskRun.exitCode = taskRun.exitCode === 0 ? 2 : taskRun.exitCode;
+    appendTaskEvent(taskRun, 'stderr', `Filesystem verification failed: ${err.message}`);
+    appendTaskEvent(taskRun, 'system', 'Filesystem verification verdict: FAIL');
+  }
 }
 
 function runPythonCheck(args) {

@@ -1,4 +1,5 @@
 import sys
+import json
 from pathlib import Path
 from typing import Dict, Any, Iterable, Generator
 
@@ -16,15 +17,106 @@ class Agent:
             model=config.llm.model,
         )
         self.tools = TOOLS
+        self.tool_schemas = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "file",
+                    "description": "Read, write, append, mkdir, and list files inside sandbox workspace.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["write", "read", "append", "mkdir", "list"]
+                            },
+                            "path": {"type": "string"},
+                            "content": {"type": "string"}
+                        },
+                        "required": ["action", "path"]
+                    }
+                }
+            }
+        ]
 
     def _system_message(self) -> Dict[str, Any]:
         return {
             "role": "system",
             "content": (
                 "You are RamClaw. You run fully locally, use LM Studio only, never call cloud models. "
-                "All file writes must remain inside /sandbox/workspace."
+                "All file writes must remain inside /sandbox/workspace. "
+                "Do not claim filesystem actions unless they were executed via the file tool and returned success. "
+                "If tool execution fails, state the failure explicitly."
             ),
         }
+
+    def _workspace_root(self) -> Path:
+        return self.config.sandbox.workspace.resolve()
+
+    def _normalize_path(self, raw: str) -> str:
+        workspace = self._workspace_root()
+        value = (raw or '').strip()
+
+        if value.startswith('/sandbox/workspace'):
+            suffix = value[len('/sandbox/workspace'):].lstrip('/\\')
+            return str((workspace / suffix).resolve())
+
+        path_value = Path(value)
+        if path_value.is_absolute():
+            return str(path_value.resolve())
+
+        return str((workspace / path_value).resolve())
+
+    def _normalize_tool_args(self, name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        if name != 'file':
+            return args
+
+        normalized = dict(args)
+        path = normalized.get('path') or normalized.get('file') or normalized.get('target')
+        if path:
+            normalized['path'] = self._normalize_path(str(path))
+        return normalized
+
+    def _parse_tool_chunk(self, chunk: str) -> list[Dict[str, Any]] | None:
+        try:
+            payload = json.loads(chunk)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(payload, dict) and isinstance(payload.get('tool_calls'), list):
+            return payload['tool_calls']
+        return None
+
+    def _execute_tool_calls(self, tool_calls: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+        executed = []
+        for call in tool_calls:
+            function = call.get('function', {})
+            tool_name = function.get('name')
+            arguments_text = function.get('arguments') or '{}'
+            try:
+                arguments = json.loads(arguments_text)
+            except json.JSONDecodeError:
+                arguments = {}
+
+            try:
+                normalized_args = self._normalize_tool_args(tool_name, arguments)
+                result = self._apply_tool_guard(tool_name, normalized_args)
+                result_text = result if isinstance(result, str) else json.dumps(result)
+                executed.append({
+                    'ok': True,
+                    'id': call.get('id', f"call_{tool_name}"),
+                    'name': tool_name,
+                    'args': normalized_args,
+                    'result': result_text
+                })
+            except Exception as exc:
+                executed.append({
+                    'ok': False,
+                    'id': call.get('id', f"call_{tool_name}"),
+                    'name': tool_name,
+                    'args': arguments,
+                    'result': f"Tool execution error: {exc}"
+                })
+        return executed
 
     def _apply_tool_guard(self, name: str, args: Dict[str, Any]) -> Any:
         if name == "file":
@@ -42,9 +134,62 @@ class Agent:
         raise ValueError(f"Tool {name} has no run method")
 
     def run_task(self, prompt: str) -> Generator[str, None, None]:
-        messages: Iterable[Dict[str, Any]] = [self._system_message(), {"role": "user", "content": prompt}]
-        for chunk in self.provider.complete(messages):
-            yield chunk
+        messages: list[Dict[str, Any]] = [self._system_message(), {"role": "user", "content": prompt}]
+
+        for _ in range(8):
+            assistant_text_chunks: list[str] = []
+            tool_call_state: Dict[int, Dict[str, Any]] = {}
+
+            for chunk in self.provider.complete(messages, tools=self.tool_schemas):
+                tool_call_deltas = self._parse_tool_chunk(chunk)
+                if tool_call_deltas is not None:
+                    for delta in tool_call_deltas:
+                        index = int(delta.get('index', 0))
+                        current = tool_call_state.get(index, {
+                            'id': None,
+                            'type': 'function',
+                            'function': {'name': '', 'arguments': ''}
+                        })
+
+                        if delta.get('id'):
+                            current['id'] = delta['id']
+
+                        fn_delta = delta.get('function', {})
+                        if fn_delta.get('name'):
+                            current['function']['name'] = fn_delta['name']
+                        if fn_delta.get('arguments'):
+                            current['function']['arguments'] += fn_delta['arguments']
+
+                        tool_call_state[index] = current
+                    continue
+
+                assistant_text_chunks.append(chunk)
+                yield chunk
+
+            if not tool_call_state:
+                return
+
+            assistant_text = ''.join(assistant_text_chunks)
+            ordered_calls = [tool_call_state[idx] for idx in sorted(tool_call_state.keys())]
+            messages.append({
+                'role': 'assistant',
+                'content': assistant_text,
+                'tool_calls': ordered_calls
+            })
+
+            executed_calls = self._execute_tool_calls(ordered_calls)
+            for executed in executed_calls:
+                tool_result_content = executed['result']
+                messages.append({
+                    'role': 'tool',
+                    'tool_call_id': executed['id'],
+                    'name': executed['name'],
+                    'content': tool_result_content
+                })
+                outcome = 'ok' if executed['ok'] else 'error'
+                yield f"\n[tool:{executed['name']}] {outcome}: {tool_result_content}\n"
+
+        yield "\nTask ended due to tool-call iteration limit.\n"
 
     def cli(self, prompt: str):
         for chunk in self.run_task(prompt):
