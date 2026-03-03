@@ -1,15 +1,17 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const SANDBOX_ROOT = path.join(__dirname, 'sandbox');
 const WEBUI_ROOT = path.join(__dirname, 'webui');
+const OPENCLAW_SRC_ROOT = path.join(__dirname, 'openclaw');
 const CONFIG_PATH = path.join(SANDBOX_ROOT, 'config.json');
 const LOG_PATH = path.join(SANDBOX_ROOT, 'ramclaw.log');
 const MAX_TASK_HISTORY = 100;
 const MAX_EVENTS_PER_TASK = 500;
 const sseClients = new Set();
+let pythonRuntimeReady = false;
 
 let nextTaskId = 1;
 const taskHistory = [];
@@ -466,6 +468,21 @@ function runAgentTask(task, responseStream) {
   log(`Task ${taskRun.id} started: ${task}`);
   appendTaskEvent(taskRun, 'system', `Task ${taskRun.id} started`);
 
+  const ready = ensurePythonRuntime(taskRun);
+  if (!ready.ok) {
+    completeTaskRun(taskRun, 'failed', 1, `Task ${taskRun.id} failed before execution`);
+    if (responseStream && !responseStream.writableEnded) {
+      responseStream.write(`\n[err] ${ready.message}`);
+      responseStream.end();
+    }
+    return { taskRun, child: null };
+  }
+
+  const existingPythonPath = process.env.PYTHONPATH || '';
+  const mergedPythonPath = existingPythonPath
+    ? `${OPENCLAW_SRC_ROOT}${path.delimiter}${existingPythonPath}`
+    : OPENCLAW_SRC_ROOT;
+
   const child = spawn(venvPython(), ['-m', 'openclaw.agent', task], {
     cwd: SANDBOX_ROOT,
     env: {
@@ -473,6 +490,7 @@ function runAgentTask(task, responseStream) {
       HOME: SANDBOX_ROOT,
       USERPROFILE: SANDBOX_ROOT,
       RAMCLAW_CONFIG: CONFIG_PATH,
+      PYTHONPATH: mergedPythonPath,
     },
   });
 
@@ -505,6 +523,60 @@ function runAgentTask(task, responseStream) {
   });
 
   return { taskRun, child };
+}
+
+function runPythonCheck(args) {
+  return spawnSync(venvPython(), args, {
+    cwd: __dirname,
+    env: {
+      ...process.env,
+      HOME: SANDBOX_ROOT,
+      USERPROFILE: SANDBOX_ROOT,
+      RAMCLAW_CONFIG: CONFIG_PATH,
+      PYTHONPATH: OPENCLAW_SRC_ROOT,
+    },
+    encoding: 'utf-8'
+  });
+}
+
+function ensurePythonRuntime(taskRun) {
+  if (pythonRuntimeReady) {
+    return { ok: true };
+  }
+
+  const check = runPythonCheck(['-c', 'import openclaw, requests']);
+  if (check.status === 0) {
+    pythonRuntimeReady = true;
+    return { ok: true };
+  }
+
+  appendTaskEvent(taskRun, 'system', 'Runtime check failed; attempting auto-repair for Python dependencies...');
+
+  const install = runPythonCheck(['-m', 'pip', 'install', './openclaw']);
+  if (install.status !== 0) {
+    const stderr = redactSensitive((install.stderr || '').trim());
+    const stdout = redactSensitive((install.stdout || '').trim());
+    const details = stderr || stdout || 'Unknown pip install failure';
+    appendTaskEvent(taskRun, 'stderr', `Auto-repair failed: ${details}`);
+    return {
+      ok: false,
+      message: `Python runtime auto-repair failed: ${details}`
+    };
+  }
+
+  const verify = runPythonCheck(['-c', 'import openclaw, requests']);
+  if (verify.status !== 0) {
+    const details = redactSensitive((verify.stderr || verify.stdout || '').trim()) || 'Unknown verification failure';
+    appendTaskEvent(taskRun, 'stderr', `Auto-repair verification failed: ${details}`);
+    return {
+      ok: false,
+      message: `Python runtime verification failed: ${details}`
+    };
+  }
+
+  pythonRuntimeReady = true;
+  appendTaskEvent(taskRun, 'system', 'Python runtime auto-repair completed successfully.');
+  return { ok: true };
 }
 
 function recordIntegrationTestInHistory(result) {
@@ -550,7 +622,7 @@ function handleTask(req, res, body) {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     const { taskRun, child } = runAgentTask(task, res);
     req.on('close', () => {
-      if (taskRun.status === 'running') {
+      if (taskRun.status === 'running' && child) {
         child.kill();
         completeTaskRun(taskRun, 'failed', -1, `Task ${taskRun.id} interrupted by client disconnect`);
       }
