@@ -521,13 +521,14 @@ function runAgentTask(task, responseStream) {
   child.on('close', (code) => {
     activeTasks.delete(taskRun.id);
     if (taskRun.status === 'running') {
-      const status = code === 0 ? 'succeeded' : 'failed';
-      completeTaskRun(taskRun, status, code, `Task ${taskRun.id} finished with code ${code}`);
+      taskRun.status = code === 0 ? 'succeeded' : 'failed';
+      taskRun.exitCode = code;
+      taskRun.finishedAt = new Date().toISOString();
+      verifySmokeArtifacts(taskRun);
+      appendTaskEvent(taskRun, 'system', `Task ${taskRun.id} finished with code ${taskRun.exitCode}`);
     }
 
-    verifySmokeArtifacts(taskRun);
-
-    log(`Task ${taskRun.id} finished with code ${code}`);
+    log(`Task ${taskRun.id} finished with code ${taskRun.exitCode}`);
     if (responseStream && !responseStream.writableEnded) {
       responseStream.end();
     }

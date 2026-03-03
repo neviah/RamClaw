@@ -75,6 +75,8 @@ class Agent:
         path = normalized.get('path') or normalized.get('file') or normalized.get('target')
         if path:
             normalized['path'] = self._normalize_path(str(path))
+        if 'content' in normalized and not isinstance(normalized['content'], str):
+            normalized['content'] = json.dumps(normalized['content'], ensure_ascii=False, indent=2)
         return normalized
 
     def _parse_tool_chunk(self, chunk: str) -> list[Dict[str, Any]] | None:

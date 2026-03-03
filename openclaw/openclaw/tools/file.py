@@ -1,13 +1,22 @@
-from pathlib import Path
 import json
+from pathlib import Path
+from typing import Any
 
 
 class FileTool:
+    def _as_text(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, (dict, list)):
+            return json.dumps(content, ensure_ascii=False, indent=2)
+        return str(content)
+
     def write(self, path: str, content: str):
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding='utf-8')
-        return f"Wrote {len(content)} bytes to {target}"
+        text = self._as_text(content)
+        target.write_text(text, encoding='utf-8')
+        return f"Wrote {len(text)} bytes to {target}"
 
     def read(self, path: str) -> str:
         return Path(path).read_text(encoding='utf-8')
@@ -15,9 +24,10 @@ class FileTool:
     def append(self, path: str, content: str):
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        text = self._as_text(content)
         with target.open('a', encoding='utf-8') as stream:
-            stream.write(content)
-        return f"Appended {len(content)} bytes to {target}"
+            stream.write(text)
+        return f"Appended {len(text)} bytes to {target}"
 
     def mkdir(self, path: str):
         target = Path(path)
