@@ -104,7 +104,8 @@ function addChatLine(container, entry) {
   buffer.delete(key);
   const line = document.createElement('div');
   line.className = 'chat-line';
-  line.innerHTML = `<small>${formatTs(entry.ts)}</small><span class="tag">[${entry.type}]</span>${escapeHtml(message)}`;
+  const taskLabel = (entry.taskId && (entry.type === 'system' || entry.type === 'stderr')) ? ` [T${entry.taskId}]` : '';
+  line.innerHTML = `<small>${formatTs(entry.ts)}</small><span class="tag">[${entry.type}${taskLabel}]</span>${escapeHtml(message)}`;
   container.appendChild(line);
   container.scrollTop = container.scrollHeight;
 }
@@ -482,7 +483,7 @@ function initEventStream() {
         ts: data.ts,
         taskId: data.taskId,
         type: data.type || 'event',
-        message: `#${data.taskId || '-'} ${data.message || ''}`
+        message: data.message || ''
       });
 
       if (data.status === 'running' && data.taskId) {
