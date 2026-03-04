@@ -26,8 +26,8 @@ module.exports = {
         venv: 'sandbox/venv',
         message: [
           'python -m pip install --upgrade pip',
-          'python -m pip install ./openclaw',
-          'python -m pip install playwright gitpython',
+          'uv pip install ./openclaw',
+          'uv pip install playwright gitpython',
           'python -m playwright install chromium'
         ]
       }
