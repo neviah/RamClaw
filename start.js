@@ -15,6 +15,7 @@ module.exports = {
       when: "{{exists('sandbox/config.json')}}",
       method: 'shell.run',
       params: {
+        daemon: true,
         message: [
           'node ramclaw_server.js'
         ],
